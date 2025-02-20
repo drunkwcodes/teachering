@@ -6,6 +6,8 @@ from flask_jwt_extended import (
 from flask_bcrypt import Bcrypt
 from peewee import *
 from flask_caching import Cache
+from teachering.models import User, Attendance
+from flask_cors import CORS
 
 # 初始化 Flask
 app = Flask(__name__)
@@ -13,21 +15,7 @@ app.config["JWT_SECRET_KEY"] = "your_secret_key"  # 請換成安全的密鑰
 bcrypt = Bcrypt(app)
 jwt = JWTManager(app)
 
-# 設定 SQLite 資料庫
-db = SqliteDatabase("attendance.db")
-
-# 使用 Peewee 定義 User 模型
-class User(Model):
-    email = CharField(unique=True)
-    password_hash = CharField()
-    role = CharField(choices=[("teacher", "teacher"), ("student", "student")])
-
-    class Meta:
-        database = db
-
-# 創建資料表（如果不存在）
-db.connect()
-db.create_tables([User])
+CORS(app)
 
 
 # 註冊 API
@@ -108,6 +96,61 @@ def check_if_token_in_blacklist(jwt_header, jwt_payload):
     jti = jwt_payload["jti"]
     return cache.get(f"{TOKEN_BLACKLIST}:{jti}") is not None
 
+
+
+
+# 學生簽到
+@app.route("/attendance/check-in", methods=["POST"])
+@jwt_required()
+def check_in():
+    current_user_email = get_jwt_identity()
+    student = User.get_or_none(User.email == current_user_email)
+
+    if not student or student.role != "student":
+        return jsonify({"error": "Unauthorized"}), 403
+
+    # 建立簽到記錄（初始狀態為 pending）
+    Attendance.create(student=student, status="pending")
+    return jsonify({"message": "Check-in submitted, waiting for approval"}), 201
+
+# 老師查詢點名記錄
+@app.route("/attendance/list", methods=["GET"])
+@jwt_required()
+def get_attendance_list():
+    current_user_email = get_jwt_identity()
+    teacher = User.get_or_none(User.email == current_user_email)
+
+    if not teacher or teacher.role != "teacher":
+        return jsonify({"error": "Unauthorized"}), 403
+
+    records = Attendance.select(Attendance, User.email).join(User).dicts()
+    return jsonify(list(records)), 200
+
+# 老師核准/拒絕簽到
+@app.route("/attendance/verify", methods=["POST"])
+@jwt_required()
+def verify_attendance():
+    current_user_email = get_jwt_identity()
+    teacher = User.get_or_none(User.email == current_user_email)
+
+    if not teacher or teacher.role != "teacher":
+        return jsonify({"error": "Unauthorized"}), 403
+
+    data = request.json
+    attendance_id = data.get("attendance_id")
+    status = data.get("status")
+
+    if status not in ["approved", "rejected"]:
+        return jsonify({"error": "Invalid status"}), 400
+
+    attendance = Attendance.get_or_none(Attendance.id == attendance_id)
+    if not attendance:
+        return jsonify({"error": "Attendance record not found"}), 404
+
+    attendance.status = status
+    attendance.save()
+    
+    return jsonify({"message": f"Attendance {status} successfully"}), 200
 
 if __name__ == "__main__":
     app.run(debug=True)
