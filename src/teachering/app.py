@@ -64,6 +64,16 @@ def refresh():
     new_access_token = create_access_token(identity=identity)
     return jsonify({"access_token": new_access_token}), 200
 
+@app.route("/auth/me", methods=["GET"])
+@jwt_required()
+def get_user():
+    current_user_email = get_jwt_identity()
+    user = User.get_or_none(User.email == current_user_email)
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+
+    return jsonify({"email": user.email, "role": user.role}), 200
+
 # 測試 API（需要登入）
 @app.route("/protected", methods=["GET"])
 @jwt_required()
@@ -151,6 +161,53 @@ def verify_attendance():
     attendance.save()
     
     return jsonify({"message": f"Attendance {status} successfully"}), 200
+
+
+@app.route("/attendance/all", methods=["GET"])
+@jwt_required()
+def get_all_attendance():
+    user_email = get_jwt_identity()
+    user = User.get_or_none(User.email == user_email)
+
+    if not user or user.role != "teacher":
+        return jsonify({"error": "Unauthorized"}), 403
+
+    attendances = Attendance.select()
+    return jsonify([
+        {
+            "id": a.id,
+            "student_email": a.student.email,
+            "status": a.status,
+            "timestamp": a.timestamp
+        } for a in attendances
+    ]), 200
+
+
+
+@app.route("/attendance/update", methods=["POST"])
+@jwt_required()
+def update_attendance():
+    user_email = get_jwt_identity()
+    user = User.get_or_none(User.email == user_email)
+
+    if not user or user.role != "teacher":
+        return jsonify({"error": "Unauthorized"}), 403
+
+    data = request.get_json()
+    attendance_id = data.get("id")
+    new_status = data.get("status")  # "approved" or "rejected"
+
+    attendance = Attendance.get_or_none(Attendance.id == attendance_id)
+    if not attendance:
+        return jsonify({"error": "Attendance not found"}), 404
+
+    if new_status not in ["approved", "rejected"]:
+        return jsonify({"error": "Invalid status"}), 400
+
+    attendance.status = new_status
+    attendance.save()
+
+    return jsonify({"message": f"Attendance {new_status}"}), 200
 
 if __name__ == "__main__":
     app.run(debug=True)
